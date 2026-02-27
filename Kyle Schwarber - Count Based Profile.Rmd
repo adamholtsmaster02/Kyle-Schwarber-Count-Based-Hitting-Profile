@@ -1,0 +1,328 @@
+---
+title: "Kylre Schwarber Pitches Seen"
+author: "Adam Holtsmaster"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(scales)
+library(gt)
+
+```
+
+```{r}
+
+path <- "~/Desktop/Indy/Kyle Schwarber Pitches Seen/Kyle Schwarber 2025 Pitch Data.csv"
+df <- read_csv(path)
+
+df2 <- df %>%
+  mutate(
+    count = paste0(balls, "-", strikes),
+    in_zone = if_else(!is.na(zone) & zone >= 1 & zone <= 9, TRUE, FALSE)
+  )
+
+pa <- df2 %>%
+  filter(!is.na(events)) %>%
+  mutate(
+    is_bb  = events == "walk",
+    is_hbp = events == "hit_by_pitch",
+    is_so  = events == "strikeout",
+    is_hr  = events == "home_run",
+    is_1b  = events == "single",
+    is_2b  = events == "double",
+    is_3b  = events == "triple",
+    is_hit = is_1b | is_2b | is_3b | is_hr,
+    is_sf  = events == "sac_fly",
+
+    is_ab = !(is_bb | is_hbp | is_sf),
+
+    tb = case_when(
+      is_1b ~ 1,
+      is_2b ~ 2,
+      is_3b ~ 3,
+      is_hr ~ 4,
+      TRUE  ~ 0
+    )
+  )
+
+```
+
+```{r}
+
+pa_by_count <- pa %>%
+  group_by(count) %>%
+  summarise(
+    PA = n(),
+    AB = sum(is_ab),
+    H  = sum(is_hit),
+    `1B` = sum(is_1b),
+    `2B` = sum(is_2b),
+    `3B` = sum(is_3b),
+    HR = sum(is_hr),
+    BB = sum(is_bb),
+    HBP = sum(is_hbp),
+    SF = sum(is_sf),
+    SO = sum(is_so),
+    TB = sum(tb),
+
+    wOBA = if_else(sum(woba_denom, na.rm = TRUE) > 0,
+                  sum(woba_value, na.rm = TRUE) / sum(woba_denom, na.rm = TRUE),
+                  NA_real_),
+
+    OBP = if_else((AB + BB + HBP + SF) > 0, (H + BB + HBP) / (AB + BB + HBP + SF), NA_real_),
+    SLG = if_else(AB > 0, TB / AB, NA_real_),
+    OPS = OBP + SLG,
+
+    K_pct  = SO / PA,
+    BB_pct = BB / PA,
+    HR_pct = HR / PA,
+    .groups = "drop"
+  )
+
+```
+
+```{r}
+
+bip_by_count <- df2 %>%
+  filter(!is.na(launch_speed)) %>%
+  group_by(count) %>%
+  summarise(
+    BIP = n(),
+    avg_ev = mean(launch_speed, na.rm = TRUE),
+    p90_ev = quantile(launch_speed, probs = 0.90, na.rm = TRUE, names = FALSE),
+    avg_la = mean(launch_angle, na.rm = TRUE),
+    hardhit_pct = mean(launch_speed >= 95, na.rm = TRUE),
+    barrel_pct = if ("launch_speed_angle" %in% names(df2)) mean(launch_speed_angle == 6, na.rm = TRUE) else NA_real_,
+    .groups = "drop"
+  )
+
+```
+
+```{r}
+
+swing_desc <- c(
+  "swinging_strike", "swinging_strike_blocked", "foul", "foul_tip",
+  "hit_into_play", "hit_into_play_no_out", "hit_into_play_score",
+  "foul_bunt", "missed_bunt"
+)
+whiff_desc <- c("swinging_strike", "swinging_strike_blocked", "missed_bunt")
+
+discipline_by_count <- df2 %>%
+  mutate(
+    swing = description %in% swing_desc,
+    whiff = description %in% whiff_desc,
+    chase = swing & !in_zone
+  ) %>%
+  group_by(count) %>%
+  summarise(
+    pitches = n(),
+    swing_pct = mean(swing, na.rm = TRUE),
+    chase_pct = if_else(sum(swing, na.rm = TRUE) > 0,
+                        sum(chase, na.rm = TRUE) / sum(swing, na.rm = TRUE),
+                        NA_real_),
+    whiff_pct = if_else(sum(swing, na.rm = TRUE) > 0,
+                        sum(whiff, na.rm = TRUE) / sum(swing, na.rm = TRUE),
+                        NA_real_),
+    .groups = "drop"
+  )
+
+```
+
+```{r}
+
+count_tbl <- pa_by_count %>%
+  full_join(bip_by_count, by = "count") %>%
+  full_join(discipline_by_count, by = "count") %>%
+  mutate(
+    balls = as.integer(str_extract(count, "^[0-3]")),
+    strikes = as.integer(str_extract(count, "(?<=-)[0-2]")),
+    count = factor(count, levels = as.character(tidyr::expand_grid(balls = 0:3, strikes = 0:2) %>%
+                                                 mutate(count = paste0(balls, "-", strikes)) %>%
+                                                 pull(count)))
+  ) %>%
+  arrange(balls, strikes)
+
+```
+
+```{r}
+
+count_tbl <- pa_by_count %>%
+  full_join(bip_by_count, by = "count") %>%
+  full_join(discipline_by_count, by = "count") %>%
+  mutate(
+    balls = as.integer(str_extract(count, "^[0-3]")),
+    strikes = as.integer(str_extract(count, "(?<=-)[0-2]")),
+    count = factor(count, levels = as.character(tidyr::expand_grid(balls = 0:3, strikes = 0:2) %>%
+                                                 mutate(count = paste0(balls, "-", strikes)) %>%
+                                                 pull(count)))
+  ) %>%
+  arrange(balls, strikes)
+
+```
+
+```{r}
+
+heat_df <- count_tbl %>%
+  mutate(
+    balls = as.integer(str_extract(as.character(count), "^[0-3]")),
+    strikes = as.integer(str_extract(as.character(count), "(?<=-)[0-2]"))
+  )
+
+ggplot(heat_df, aes(x = factor(balls), y = factor(strikes), fill = wOBA)) +
+  geom_tile(color = "white") +
+  scale_y_discrete(limits = rev) +
+  labs(
+    title = "wOBA by Count",
+    x = "Balls",
+    y = "Strikes",
+    fill = "wOBA"
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+
+```{r}
+
+ggplot(count_tbl, aes(x = count, y = avg_ev)) +
+  geom_col() +
+  labs(
+    title = "Average Exit Velocity by Count (Batted Balls Only)",
+    x = "Count",
+    y = "Avg EV"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+
+adv_counts  <- c("2-0", "3-1", "3-0", "1-0")
+prot_counts <- c("0-2", "1-2", "0-1")
+
+summary_split <- count_tbl %>%
+  mutate(group = case_when(
+    as.character(count) %in% adv_counts  ~ "Advantage",
+    as.character(count) %in% prot_counts ~ "Protect",
+    TRUE ~ "Neutral"
+  )) %>%
+  group_by(group) %>%
+  summarise(
+    PA_total  = sum(PA,  na.rm = TRUE),
+    BIP_total = sum(BIP, na.rm = TRUE),
+
+    # weighted means MUST use the per-row PA/BIP weights, not the totals
+    wOBA = weighted.mean(wOBA, w = PA,  na.rm = TRUE),
+    OPS  = weighted.mean(OPS,  w = PA,  na.rm = TRUE),
+    avg_ev = weighted.mean(avg_ev, w = BIP, na.rm = TRUE),
+    hardhit_pct = weighted.mean(hardhit_pct, w = BIP, na.rm = TRUE),
+
+    .groups = "drop"
+  ) %>%
+  arrange(factor(group, levels = c("Advantage", "Neutral", "Protect")))
+
+summary_gt <- summary_split %>%
+  # optional: add a quick delta vs Neutral
+  mutate(
+    wOBA_vs_neutral = wOBA - wOBA[group == "Neutral"],
+    OPS_vs_neutral  = OPS  - OPS[group == "Neutral"],
+    EV_vs_neutral   = avg_ev - avg_ev[group == "Neutral"]
+  ) %>%
+  select(
+    group, PA_total, BIP_total,
+    wOBA, wOBA_vs_neutral,
+    OPS,  OPS_vs_neutral,
+    avg_ev, EV_vs_neutral,
+    hardhit_pct
+  ) %>%
+  gt(rowname_col = "group") %>%
+  tab_header(
+    title = "Kyle Schwarber — Count Group Summary (2025)",
+    subtitle = "Weighted by PA for results (wOBA/OPS) and by BIP for contact quality (EV/HardHit)"
+  ) %>%
+  cols_label(
+    PA_total = "PA",
+    BIP_total = "BIP",
+    wOBA = "wOBA",
+    wOBA_vs_neutral = "Δ wOBA vs Neutral",
+    OPS = "OPS",
+    OPS_vs_neutral = "Δ OPS vs Neutral",
+    avg_ev = "Avg EV",
+    EV_vs_neutral = "Δ EV vs Neutral",
+    hardhit_pct = "HardHit%"
+  ) %>%
+  fmt_number(columns = c(wOBA, wOBA_vs_neutral, OPS, OPS_vs_neutral), decimals = 3) %>%
+  fmt_number(columns = c(avg_ev, EV_vs_neutral), decimals = 1) %>%
+  fmt_percent(columns = hardhit_pct, decimals = 1) %>%
+  fmt_number(columns = c(PA_total, BIP_total), decimals = 0) %>%
+  # nice visual emphasis
+  data_color(
+    columns = c(wOBA, OPS, avg_ev),
+    colors = scales::col_numeric(c("#f7fbff", "#08306b"), domain = NULL)
+  ) %>%
+  data_color(
+    columns = c(wOBA_vs_neutral, OPS_vs_neutral, EV_vs_neutral),
+    colors = scales::col_numeric(c("#b2182b", "#f7f7f7", "#2166ac"), domain = NULL)
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()
+  )
+
+summary_gt
+
+```
+
+```{r}
+
+count_gt <- count_tbl %>%
+  mutate(count_chr = as.character(count)) %>%
+  select(
+    count_chr,
+    # Volume
+    PA, AB, BIP, pitches,
+    # Results
+    wOBA, OPS, OBP, SLG,
+    K_pct, BB_pct, HR_pct,
+    # Contact quality
+    avg_ev, p90_ev, avg_la, hardhit_pct, barrel_pct,
+    # Approach (optional)
+    swing_pct, chase_pct, whiff_pct
+  ) %>%
+  gt(rowname_col = "count_chr") %>%
+  tab_header(
+    title = "Kyle Schwarber — Metrics by Count (2025)",
+    subtitle = "One row per count; PA-based results + batted-ball quality + approach"
+  ) %>%
+  cols_label(
+    count_chr = "Count",
+    PA = "PA", AB = "AB", BIP = "BIP", pitches = "Pitches",
+    wOBA = "wOBA", OPS = "OPS", OBP = "OBP", SLG = "SLG",
+    K_pct = "K%", BB_pct = "BB%", HR_pct = "HR%",
+    avg_ev = "Avg EV", p90_ev = "90th EV", avg_la = "Avg LA",
+    hardhit_pct = "HardHit%", barrel_pct = "Barrel%",
+    swing_pct = "Swing%", chase_pct = "Chase%", whiff_pct = "Whiff%"
+  ) %>%
+  tab_spanner(label = "Volume", columns = c(PA, AB, BIP, pitches)) %>%
+  tab_spanner(label = "Results (PA-based)", columns = c(wOBA, OPS, OBP, SLG, K_pct, BB_pct, HR_pct)) %>%
+  tab_spanner(label = "Contact Quality (BIP-only)", columns = c(avg_ev, p90_ev, avg_la, hardhit_pct, barrel_pct)) %>%
+  tab_spanner(label = "Approach (Pitch-based)", columns = c(swing_pct, chase_pct, whiff_pct)) %>%
+  fmt_number(columns = c(PA, AB, BIP, pitches), decimals = 0) %>%
+  fmt_number(columns = c(wOBA, OPS, OBP, SLG), decimals = 3) %>%
+  fmt_number(columns = c(avg_ev, p90_ev, avg_la), decimals = 1) %>%
+  fmt_percent(columns = c(K_pct, BB_pct, HR_pct, hardhit_pct, barrel_pct, swing_pct, chase_pct, whiff_pct), decimals = 1) %>%
+  # Make it easier to read: highest wOBA at top
+  tab_options(table.font.size = px(12)) %>%
+  opt_table_outline() %>%
+  opt_row_striping()
+
+count_gt
+
+```
